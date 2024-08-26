@@ -617,7 +617,7 @@ asts_function <- function(txt_name,
       cat("\n", file = file_path, append = TRUE)
       cat("**---- Results written to file ----**\n")
       
-      # Update inhibition sample
+      # Update  sample
       new_data <- dis_Jug(validation.res$val_data, sampleDis, est_station, val_station)
       result_max2 <- new_data %>%
         select(Station_ID, month, res) %>%
