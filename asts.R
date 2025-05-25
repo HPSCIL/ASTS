@@ -3,16 +3,14 @@
 # Platform: x86_64-w64-mingw32/x64 (64-bit)
 ##'
 ##'This code aims to provide the source code for a spatiotemporal adaptive sampling algorithm model.
-##'The model is applicable to research aimed at minimizing long-term cumulative prediction errors.
+##'The model is applicable to research aimed at minimizing  cumulative prediction errors.
 ##'The minimum requirements for model construction are: projection coordinates utmX, utmY (used for building the inla-spde mesh) and the target variable.
 ##'If there are covariates involved in the model building, they can also be applied (just modify the expression as needed).
 ##'
 ##'This software package is compiled and executed in a Windows environment. 
-##'The Mac environment requires independent configuration of packages such as INLA and GA.
-##'The INLA package and related papers referenced for use are as follows.'https://www.r-inla.org/what-is-inla
-##' 
-##' Copyright (C) China University of Geosciences (Wuhan) High-Performance Spatial Computational Intelligence Lab
-##' @author JunfengGu  v1.0
+##'The Mac environment requires independent configuration of packages such as INLA 
+##'The INLA package and related papers referenced for use are as follows.'https://www.r-inla.org/
+##' @author JunfengGu  v1.1
 
 #######################################################################
 #############  cube1 load library                                  
@@ -59,7 +57,6 @@ head(data.coordinates.sf)
 # 5          5 POINT (817.142 3465.925)
 # 6          6  POINT (821.42 3466.056)
 
-head(data.pm.2017)
 
 head(data.pm.all)
 # Station_ID      Lon     Lat  UTM_X    UTM_Y month PM2017 PM2018 PM2019 PM2020 PM2021
@@ -110,41 +107,40 @@ head(data.pm.all)
 ini_sample_num <- 5
 target_samplesize <- 10
 
+data.pm <- data.pm.all[, c("Station_ID", 
+                           "Lon", 
+                           "Lat", 
+                           "UTM_X", 
+                           "UTM_Y", 
+                           "month", 
+                           "PM2017")]
 
-alpha_value <- c("1/2","1","3/2")
-prior.range_max_value <- seq(10, 30, by = 5)
+
+alpha_value <- c("1","3/2","2")
+prior.range_max_value <- seq(20, 30, by = 5)
 sampleDis_value <- seq(10, 20, by = 2)
-borderDis_value <- seq(10,15,by=3)
+borderDis_value <- seq(10,15,by=1)
 
 
 #NOte!!! :Too many combinations mean it will be more time-consuming.
 para.combinations <- expand.grid(alpha = alpha_value,
-                            prior.range_max = prior.range_max_value,
-                            sampleDis = sampleDis_value,
-                            borderDis=borderDis_value)
-
-#######################################################################
-#############  cube4 define formular                                  
-#######################################################################
-##'This is only part of the formula, focusing on the predictive variables and covariates. 
-##'During the modeling process, it is also necessary to incorporate spatiotemporal features. 
-##'The complete formula will require the addition of space-related SPDEs and time-related models.
-##'Since the SPDE is continuously updated during the sampling process, it is defined within the sampling function.
-f <- logPM ~ -1 + Intercept + UTM_X + UTM_Y
+                                 prior.range_max = prior.range_max_value,
+                                 sampleDis = sampleDis_value,
+                                 borderDis=borderDis_value)
 
 
 #######################################################################
-#############  cube5 load ASTS                                  
+#############  cube4 load ASTS                                  
 #######################################################################
 n_stations <- length(data.coordinates.utm$Station_ID)
 n_data <- length(data.pm.2017$Station_ID) 
 n_time <- as.integer(n_data/n_stations)
-list_stationID <- list(data.coordinates.utm$Station_ID)
+data.stationID <- unique(data.coordinates.utm$Station_ID)
 
 #Each parameter's sampling scheme under different iteration requirements is directly stored in a TXT file. 
 # For example, if the target sample size is 10 and there are 5 parameter sets, with each set having 5 iterations, then the file name could be sample10_3.5.
 # Here, 10_3 indicates the third parameter space, while 5 denotes the fifth iterations within that space.
-filename <-"sample10_" 
+filename <-"sample_10_" 
 
 # The variable 'outpath' represents the folder where all the txt files from this experiment are stored.
 outpath <- "txtOut/sample10"
@@ -332,29 +328,51 @@ cal_dis <- function(x1, y1, x2, y2) {
 calculate_validation_metrics <- function(stack, result.1, val.data) {
   tryCatch({
     validation.res <- list()
+    
+    # Extract indices and predictor summaries  
     index_val <- inla.stack.index(stack, "val")$data
-    tmp_val.mean <- result.1$summary.linear.predictor[index_val, "mean"]
-    tmp_val.sd <- result.1$summary.linear.predictor[index_val, "sd"]
     
-    val.data$pm_val <- tmp_val.mean
-    val.data$res <- abs(val.data$logPM - tmp_val.mean)
+    predictor_summary <- result.1$summary.linear.predictor  
+    hyper_summary <- result.1$summary.hyperpar 
     
+    # tmp_val.mean <- result.1$summary.linear.predictor[index_val, "mean"]
+    # tmp_val.sd <- result.1$summary.linear.predictor[index_val, "sd"]
+    
+    if (length(index_val) != nrow(val.data)) {  
+      stop("Mismatch between validation index and provided validation data.")  
+    }  
+    
+    pred_mean <- predictor_summary[index_val, "mean"]  
+    pred_sd <- predictor_summary[index_val, "sd"]  
+    
+    
+    # Assign predictions and residuals  
+    val.data$pm_val <- pred_mean  
+    val.data$res <- abs(val.data$logPM - pred_mean)  
+    
+    
+    # Compute standardised residuals  
     validation.res$res.std <- (val.data$logPM - tmp_val.mean) / sqrt(tmp_val.sd^2 + 1/result.1$summary.hyperpar[1, "mean"])
     validation.res$p <- pnorm(validation.res$res.std)
     validation.res$cover <- mean((validation.res$p > 0.025) & (validation.res$p < 0.975), na.rm = TRUE)
     
+    
+    
+    # Classic metrics  
     validation.res$dic <- result.1[["dic"]][["dic"]]
     validation.res$rmse <- sqrt(mean(val.data$res^2, na.rm = TRUE))
     validation.res$mae <- mae(val.data$logPM, val.data$pm_val)
     validation.res$mse <- mse(val.data$logPM, val.data$pm_val)
     validation.res$r2 <- calculate_r2_score(val.data$logPM, val.data$pm_val)
-    
     validation.res$GroupRho <- result.1$summary.hyperpar["GroupRho for field", ][[1]]
     validation.res$cor <- cor(val.data$logPM, val.data$pm_val, use = "pairwise.complete.obs", method = "pearson")
-    validation.res$val.data <- val.data
     
-    cat("Validation metrics calculated successfully.\n")
+    
+    validation.res$val.data <- val.data
+    message("Validation metrics calculated successfully.")  
+    
     return(validation.res)
+    
   }, error = function(e) {
     cat("An error occurred in calculate_validation_metrics: ", e$message, "\n")
     return(NULL)
@@ -383,21 +401,12 @@ calculate_validation_metrics <- function(stack, result.1, val.data) {
 # - The function will attempt to generate a valid sample up to 'maxTryTimes' times. 
 #   If unsuccessful, it suggests adjusting the 'dis' parameter.
 # - The function includes input validation and error handling to ensure robustness.
-analyze_inhibit_sample <- function(data_border, data_utm, ini_sampleNUM, del, dis) {
+analyze_inhibit_sample <- function(ini_sampleNUM, del, dis) {
   tryTimes <- 0
   maxTryTimes <- 1000
   
   tryCatch({
     # Validate inputs
-    if (!is.data.frame(data_border) || !is.data.frame(data_utm)) {
-      stop("Error: 'data_border' and 'data_utm' must be data frames.")
-    }
-    if (!all(c('UTM_X', 'UTM_Y') %in% names(data_utm))) {
-      stop("Error: 'data_utm' must contain 'UTM_X' and 'UTM_Y' columns.")
-    }
-    if (!all(c('UTM_X', 'UTM_Y') %in% names(data_border))) {
-      stop("Error: 'data_border' must contain 'UTM_X' and 'UTM_Y' columns.")
-    }
     if (!is.numeric(ini_sampleNUM) || ini_sampleNUM <= 0) {
       stop("Error: 'ini_sampleNUM' must be a positive number.")
     }
@@ -407,35 +416,27 @@ analyze_inhibit_sample <- function(data_border, data_utm, ini_sampleNUM, del, di
     if (!is.numeric(dis) || dis <= 0) {
       stop("Error: 'dis' must be a positive number.")
     }
-    
-    # Convert data_utm to sf object
-    data_sf <- st_as_sf(data_utm, coords = c('UTM_X', 'UTM_Y'))
-    
-    # Check if data_sf is an sf object
-    if (!inherits(data_sf, "sf")) {
-      stop("Error: data_sf must be of class 'sf'.")
-    }
-    
     while (tryTimes < maxTryTimes) {
       # Increment tryTimes
       tryTimes <- tryTimes + 1
       cat("Attempting to generate inhibit sample, try #", tryTimes, "\n")
-      
       # Attempt to generate inhibit sample
-      inhibit_sample <- discrete.inhibit.sample(obj = data_sf, size = ini_sampleNUM, delta = del, plotit = FALSE)
+      
+      inhibit_sample <- discrete.inhibit.sample(obj = data.coordinates.sf, size = ini_sampleNUM, delta = del, plotit = FALSE)
+      cat("================inhibit_sample success================ \n")
       
       # Check if inhibit_sample is valid
       if (is.null(inhibit_sample) || length(inhibit_sample[[4]]) == 0) {
         cat("Warning: Inhibit sample generation failed, retrying...\n")
         next
       }
-      
-      inhibit_sample_selected_data <- data_utm[data_utm$Station_ID %in% inhibit_sample[[4]][[1]], ]
+      inhibit_sample_selected_data <- data.coordinates.utm[data.coordinates.utm$Station_ID %in% inhibit_sample[[4]][[1]], ]
+      cat("================inhibit_sample_selected_data success================ \n")
       
       # Calculate minimum distances
       min_distances <- sapply(1:nrow(inhibit_sample_selected_data), function(i) {
         point <- inhibit_sample_selected_data[i, ]
-        distances <- sqrt((data_border$UTM_X - point$UTM_X)^2 + (data_border$UTM_Y - point$UTM_Y)^2)
+        distances <- sqrt((data.border$UTM_X - point$UTM_X)^2 + (data.border$UTM_Y - point$UTM_Y)^2)
         min(distances)
       })
       
@@ -447,12 +448,10 @@ analyze_inhibit_sample <- function(data_border, data_utm, ini_sampleNUM, del, di
           return(TRUE)
         }
       }
-      
       result <- check_distances(min_distances)
-      
       if (result) {
         cat("Inhibit sample generation successful.\n")
-        plot(data_border)
+        plot(data.border)
         points(st_coordinates(inhibit_sample[[4]])[,1], st_coordinates(inhibit_sample[[4]])[,2], col = "blue", pch = 19)
         return(inhibit_sample[[4]][[1]])
       } else {
@@ -466,6 +465,64 @@ analyze_inhibit_sample <- function(data_border, data_utm, ini_sampleNUM, del, di
     return(NULL)
   })
 }
+
+
+# Function: dis_Jug  
+# Description:  
+#   This function filters out (excludes) validation stations from a dataset if they are within  
+#   a specified minimum distance from any estimation station. It is commonly used in spatial   
+#   validation processes to ensure that the validation set is spatially independent from the   
+#   estimation set by removing validation points that are too close to estimation points.  
+#  
+# Parameters:  
+# - data_val: Data frame. Contains all validation station information.  
+#             Must include at least the columns: Station_ID, UTM_X, UTM_Y.  
+# - distance: Numeric. The minimum allowable distance (in the same unit as UTM_X/UTM_Y, e.g., meters).  
+#             Validation stations within this distance from any estimation station will be excluded.  
+# - est_station: Data frame. Contains the spatial coordinates for the estimation stations.  
+#                Must include Station_ID, UTM_X, UTM_Y.  
+# - val_station: Data frame. Contains the spatial coordinates for the validation stations.  
+#                Must include Station_ID, UTM_X, UTM_Y.  
+#  
+# Returns:  
+# - A data frame with the remaining validation stations that are at least 'distance' away  
+#   from all estimation stations. The filtered data has the same structure as 'data_val'.  
+#  
+# Notes:  
+# - The function iterates through each estimation station and compares the distance to every  
+#   validation station. If the distance is less than the threshold, the validation station is excluded.  
+# - The function prints out the number of remaining stations and total exclusions for monitoring.  
+# - If, after exclusion, the number of remaining validation stations is negative, a warning is triggered.  
+# - It is assumed that a helper function 'cal_dis(x1, y1, x2, y2)' exists for Euclidean distance calculation.  
+# - This function has no side effects and does not modify the original data frames.
+dis_Jug <- function(data_val, distance, est_station, val_station) {  
+  # Generate all pairs of estimation and validation stations  
+  idx_est <- rep(1:nrow(est_station), each = nrow(val_station))  
+  idx_val <- rep(1:nrow(val_station), times = nrow(est_station))  
+  
+  # Calculate distances for all pairs  
+  dists <- mapply(  
+    function(i, j) cal_dis(est_station$UTM_X[i], est_station$UTM_Y[i],  
+                           val_station$UTM_X[j], val_station$UTM_Y[j]),  
+    idx_est, idx_val  
+  )  
+  
+  # Identify validation stations to exclude  
+  to_exclude <- unique(val_station$Station_ID[idx_val[dists < distance]])  
+  
+  residual <- nrow(val_station) - length(to_exclude)  
+  if (residual < 0) {  
+    warning("Negative number of residual stations after exclusion.")  
+  }  
+  
+  message("**----residual number ", residual, " Station ----**")  
+  message("**----total exclude ", length(to_exclude), " Station ----**")  
+  
+  # Filter out excluded validation stations  
+  new_data <- data_val[!data_val$Station_ID %in% to_exclude, ]  
+  return(new_data)  
+}  
+
 
 
 # Function: asts_function
@@ -482,45 +539,34 @@ analyze_inhibit_sample <- function(data_border, data_utm, ini_sampleNUM, del, di
 #
 # Returns: NULL. The function primarily writes data to a specified text file.
 # Each loop iteration prints messages to indicate progress and status of the process.
-asts_function <- function(txt_name,
-                          alpha,
-                          prior.range_max) {
+
+
+asts_function <- function(file_name,
+                          alpha_value,
+                          prior.range_max_value,
+                          inhibit_sample) {
   tryCatch({
     # Validate inputs
-    if (!is.character(txt_name) || nchar(txt_name) == 0) {
-      stop("Error: 'txt_name' must be a non-empty string.")
-    }
-    if (!is.data.frame(data.coordinates) || !is.data.frame(data.pm)) {
-      stop("Error: 'data.coordinates' and 'data.pm' must be data frames.")
-    }
-    if (!all(c('UTM_X', 'UTM_Y', 'Station_ID') %in% names(data.coordinates))) {
-      stop("Error: 'data.coordinates' must contain 'UTM_X', 'UTM_Y' and 'Station_ID' columns.")
-    }
-    if (!all(c('PM', 'Station_ID') %in% names(data.pm))) {
-      stop("Error: 'data.pm' must contain 'PM' and 'Station_ID' columns.")
-    }
-    if (!is.numeric(target_samplesize) || target_samplesize <= 0) {
-      stop("Error: 'target_samplesize' must be a positive number.")
-    }
-    if (!is.numeric(inhibit_samplesize) || inhibit_samplesize <= 0) {
-      stop("Error: 'inhibit_samplesize' must be a positive number.")
-    }
-    if (!is.numeric(alpha) || alpha <= 0) {
-      stop("Error: 'alpha' must be a positive number.")
-    }
-    if (!is.numeric(prior.range_max) || prior.range_max <= 0) {
-      stop("Error: 'prior.range_max' must be a positive number.")
-    }
+    stopifnot(  
+      is.character(file_name) && nchar(file_name) > 0,  
+      is.data.frame(data.coordinates.utm),  
+      is.data.frame(data.pm),  
+      all(c('UTM_X', 'UTM_Y', 'Station_ID') %in% names(data.coordinates.utm)),  
+      is.numeric(target_samplesize) && target_samplesize > 0,  
+      is.numeric(ini_sample_num) && ini_sample_num > 0,  
+      is.numeric(alpha_value) && alpha_value > 0,  
+      is.numeric(prior.range_max_value) && prior.range_max_value > 0  
+    ) 
     
-    I <- 0
-    I1 <- target_samplesize - length(inhibit_sample) + 1
+    iteration  <- 0
+    max_iteration  <- target_samplesize - ini_sample_num + 1
     est_ID <- c()
     
-    while (I < I1) {
-      cat("**---- Iteration I =", I, "----**\n")
-      if (length(inhibit_sample) == inhibit_samplesize) {
+    while (iteration < max_iteration) {
+      message("**---- Iteration I =", I, "----**\n")
+      if (!is.null(inhibit_sample) && length(inhibit_sample) == ini_sample_num) {
         est_ID <- inhibit_sample
-        val_ID <- list_stationID[!list_stationID %in% est_ID]
+        val_ID <- data.stationID[!data.stationID %in% est_ID]
         inhibit_sample <- NULL
         cat("**---- Inhibit sample success ---**\n")
       } else {
@@ -529,16 +575,16 @@ asts_function <- function(txt_name,
       }
       
       # Working with estimation and validation sets
-      est_station <- data.coordinates[data.coordinates$Station_ID %in% est_ID,] 
-      est_data <- data.pm[data.pm$Station_ID %in% est_ID,]
-      val_station <- data.coordinates[data.coordinates$Station_ID %in% val_ID,]
-      val_data <- data.pm[data.pm$Station_ID %in% val_ID,]
+      est_station <- filter(data.coordinates.utm, Station_ID %in% est_ID)  
+      est_data    <- filter(data.pm, Station_ID %in% est_ID)  
+      val_station <- filter(data.coordinates.utm, Station_ID %in% val_ID)  
+      val_data    <- filter(data.pm, Station_ID %in% val_ID)
       
       # Normalize covariates
-      mean_covariates <- colMeans(data.pm[,2:3], na.rm = TRUE)
-      sd_covariates <- apply(data.pm[,2:3], 2, sd, na.rm = TRUE)
-      est_data[,2:3] <- scale(est_data[,2:3], mean_covariates, sd_covariates)
-      val_data[,2:3] <- scale(val_data[,2:3], mean_covariates, sd_covariates)
+      mean_covariates <- colMeans(data.pm[,4:5], na.rm = TRUE)
+      sd_covariates <- apply(data.pm[,4:5], 2, sd, na.rm = TRUE)
+      est_data[,4:5] <- scale(est_data[,4:5], mean_covariates, sd_covariates)
+      val_data[,4:5] <- scale(val_data[,4:5], mean_covariates, sd_covariates)
       
       # Log-transform PM values
       est_data$logPM <- log(est_data$PM)
@@ -546,50 +592,59 @@ asts_function <- function(txt_name,
       
       # Create mesh
       mesh <- inla.mesh.2d(loc = cbind(est_station$UTM_X, est_station$UTM_Y),
-                           loc.domain = data_WH_border,
+                           loc.domain = data.border,
                            max.edge = c(15, 100),
                            min.angle = c(26, 21),
                            cutoff = 5, 
                            plot.delay = NULL)
       cat("Created mesh with", mesh$n, "vertices\n")
       plot(mesh)
-      points(x = data_WH_border$UTM_X, y = data_WH_border$UTM_Y, cex = 0.1, col = 'red')
+      points(x = data.border$UTM_X, y = data.border$UTM_Y, cex = 0.1, col = 'red')
       points(x = est_station$UTM_X, y = est_station$UTM_Y, pch = 17, cex = 1, col = "blue")
       
       # SPDE model
-      spde <- inla.spde2.pcmatern(mesh = mesh, alpha = alpha, constr = TRUE,
-                                  prior.range = c(prior.range_max, 0.01),
+      spde <- inla.spde2.pcmatern(mesh = mesh, 
+                                  alpha = alpha_value, 
+                                  constr = TRUE,
+                                  prior.range = c(prior.range_max_value, 0.01),
                                   prior.sigma = c(3, 0.01))
       
       # Field indices
-      field.indices <- inla.spde.make.index("field", n.spde = spde$n.spde, n.group = n_time)
+      field.indices <- inla.spde.make.index("field",
+                                            n.spde = spde$n.spde,
+                                            n.group = n_time)
       cat("**---- SPDE model and field indices setup success! ---**\n")
       
       # Projection matrices
-      A.est <- inla.spde.make.A(mesh, loc =
-                                  as.matrix(data.coordinates[est_data$Station_ID, c("UTM_X", "UTM_Y")]),
+      A.est <- inla.spde.make.A(mesh, 
+                                loc =as.matrix(data.coordinates.utm[est_data$Station_ID, c("UTM_X", "UTM_Y")]),
                                 group = est_data$month, n.group = n_time)
-      A.val <- inla.spde.make.A(mesh, loc =
-                                  as.matrix(data.coordinates[val_data$Station_ID, c("UTM_X", "UTM_Y")]),
+      A.val <- inla.spde.make.A(mesh, 
+                                loc =as.matrix(data.coordinates.utm[val_data$Station_ID, c("UTM_X", "UTM_Y")]),
                                 group = val_data$month, n.group = n_time)
       
       # Stacks
-      stack.est <- inla.stack(data = list(logPM = est_data$logPM), A = list(A.est, 1),
-                              effects = list(c(field.indices, list(Intercept = 1)),
-                                             list(est_data[,2:3])),
+      stack.est <- inla.stack(data = list(logPM = est_data$logPM), 
+                              A = list(A.est, 1),
+                              effects = list(c(field.indices, list(Intercept = 1)),list(est_data[,4:5])),
                               tag = "est")
       
-      stack.val <- inla.stack(data = list(logPM = NA), A = list(A.val, 1),
-                              effects = list(c(field.indices, list(Intercept = 1)),
-                                             list(val_data[,2:3])),
+      stack.val <- inla.stack(data = list(logPM = NA), 
+                              A = list(A.val, 1),
+                              effects = list(c(field.indices, list(Intercept = 1)),list(val_data[,4:5])),
                               tag = "val")
       
       stack <- inla.stack(stack.est, stack.val)
       
-      # Model formula
-      rprior <- list(theta = list(prior = "pccor1", param = c(0, 0.9)))
-      formula <- (f + f(field, model = spde, group = field.group, control.group = list(model = "ar1", hyper = rprior)))
       
+      rprior <- list(theta = list(prior = "pccor1", param = c(0, 0.9)))
+      
+      # Model formula
+      formula <- (logPM ~ -1 + Intercept + UTM_X + UTM_Y +
+                    f(field, model=spde, group=field.group, 
+                      control.group=list(model="ar1", hyper = rprior)))
+      
+      cat("**---- formula setup success! ---**\n")
       # INLA model fit
       result.1 <- inla(formula, data = inla.stack.data(stack, spde = spde),
                        family = "gaussian",
@@ -606,19 +661,19 @@ asts_function <- function(txt_name,
       validation.res <- calculate_validation_metrics(stack, result.1, val_data)
       validation.res$sampleSize <- length(est_ID)
       validation.res$SampleID <- est_ID 
-      file_path <- file.path(outpath, txt_name)
+      file_path <- file.path(outpath, file_name)
       
-      # Write results to file
-      if (!file.exists(file_path)) {
-        file.create(file_path)
-      }
+      output_dir <- dirname(file_path)  
+      if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)  
+      if (!file.exists(file_path)) file.create(file_path)
+      
       selected_items <- round(unlist(validation.res[c("sampleSize", "cover", "dic", "rmse", "mae", "mse", "r2", "GroupRho", "cor", "SampleID")]), 4)
       write.table(selected_items, file_path, append = TRUE, col.names = FALSE)
       cat("\n", file = file_path, append = TRUE)
       cat("**---- Results written to file ----**\n")
+      # Update inhibition sample
+      new_data <- dis_Jug(validation.res$val.data, sampleDis_value, est_station, val_station)
       
-      # Update  sample
-      new_data <- dis_Jug(validation.res$val_data, sampleDis, est_station, val_station)
       result_max2 <- new_data %>%
         select(Station_ID, month, res) %>%
         group_by(Station_ID) %>%
@@ -626,7 +681,6 @@ asts_function <- function(txt_name,
         arrange(desc(total_res)) %>%
         slice(1) %>%
         select(StationID = Station_ID)
-      
       I <- I + 1
       cat("**---- Iteration update success! ---**\n")
     }
@@ -653,13 +707,9 @@ asts_function <- function(txt_name,
 #            The number of attempts or iterations the loop should execute. Must be a positive integer.
 # ini_sample_num: Numeric. The initial number of samples, used to determine the starting quantity of data. Must be positive.
 # target_samplesize: Numeric. The target sample size, indicating the desired number of samples in the dataset. Must be positive.
-load_asts <- function(alpha, prior_range_max, sampleDis, borderDis, iterations) {
-  
+
+load_asts <- function(ini_sample_num,alpha, prior_range_max, sampleDis, borderDis, iterations) {
   # Basic input validation
-  if (!is.numeric(alpha) || alpha < 0 || alpha > 1) {
-    stop("Alpha should be a numeric value between 0 and 1.")
-  }
-  
   if (!is.numeric(prior_range_max) || prior_range_max <= 0) {
     stop("prior_range_max should be a positive numeric value.")
   }
@@ -699,10 +749,10 @@ load_asts <- function(alpha, prior_range_max, sampleDis, borderDis, iterations) 
       next
     }
     
-    # Assume asts_function is a predefined function
     asts_function(file_name,
                   as.numeric(alpha),
-                  as.numeric(prior_range_max))
+                  as.numeric(prior_range_max),
+                  inhibit_sample)
     
     # Print the processed file name for confirmation
     print(paste("Processed:", file_name))
@@ -740,7 +790,7 @@ asts_start <- function(para.combinations, iterations) {
     borderDis <- as.numeric(para.combinations[i, "borderDis"])
     
     # Call load_asts function with extracted parameters
-    load_asts(alpha, prior_range_max, sampleDis, borderDis, iterations)
+    load_asts(ini_sample_num,alpha, prior_range_max , sampleDis, borderDis, iterations)
   }
 }
 
@@ -840,7 +890,7 @@ extract_result <- function(directory_path) {
   min_rmse_index <- which.min(rmse_values)
   min_rmse_scenario <- results[[min_rmse_index]]
   
-  # Output details of the file with the minimum RMSE
+  # Output details of the file with the minimum RMSE0
   cat(
     "File with minimum RMSE:", min_rmse_scenario$file_path, "\n",
     "RMSE =", min_rmse_scenario$rmse, "\n",
