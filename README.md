@@ -18,7 +18,8 @@ The entry point for the program is at
     
 >[!Caution]
 >It is highly recommended to read the content in the comments before using the code.
-
+>
+Please cite: Gu, J., Guan, Q., & Li, Y. (2025). An Adaptive Spatiotemporal Sampling Method for Optimal Environmental Sensor Placement. Annals of the American Association of Geographers, 1–19. https://doi.org/10.1080/24694452.2025.2522841
 
 
 
